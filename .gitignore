@@ -1,0 +1,9 @@
+.DS_Store
+.venv/
+.worktrees/
+.release-preview/
+build/
+dist/
+__pycache__/
+*.egg-info/
+*.pyc

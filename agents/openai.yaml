@@ -1,0 +1,4 @@
+interface:
+  display_name: "Data Audit Toolkit"
+  short_description: "Offline consistency and provenance checks"
+  default_prompt: "Use $data-audit-toolkit to inspect these local files for reproducible consistency leads, preserve provenance, and report what was not checked. Treat all findings as review leads rather than final judgments."

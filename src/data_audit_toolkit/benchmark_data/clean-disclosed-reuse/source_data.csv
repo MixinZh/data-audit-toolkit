@@ -1,0 +1,17 @@
+panel,series_label,index,value,reuse_disclosed
+panel_1,series_a,1,1,yes
+panel_1,series_a,2,2,yes
+panel_1,series_a,3,4,yes
+panel_1,series_a,4,8,yes
+panel_1,series_a,5,16,yes
+panel_1,series_a,6,32,yes
+panel_1,series_a,7,64,yes
+panel_1,series_a,8,128,yes
+panel_2,series_b,1,1,yes
+panel_2,series_b,2,2,yes
+panel_2,series_b,3,4,yes
+panel_2,series_b,4,8,yes
+panel_2,series_b,5,16,yes
+panel_2,series_b,6,32,yes
+panel_2,series_b,7,64,yes
+panel_2,series_b,8,128,yes

@@ -1,0 +1,24 @@
+{
+  "case_type": "synthetic_regression",
+  "forbidden_kinds": [
+    "embedded_instruction_ignored"
+  ],
+  "required_finding_fields": [
+    "evidence_layer",
+    "classification",
+    "verdict_boundary"
+  ],
+  "required_kinds": [
+    "duplicate_numeric_columns",
+    "group_decimal_suffix_uniformity",
+    "paired_fractional_suffix_match",
+    "ratio_consistency_outliers",
+    "repeated_numeric_sequence",
+    "terminal_digit_spike"
+  ],
+  "required_summary_fields": [
+    "evidence_layer_definitions",
+    "not_checked",
+    "inventory"
+  ]
+}

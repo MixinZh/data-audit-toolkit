@@ -1,0 +1,3 @@
+prune tests
+global-exclude .env .env.*
+global-exclude *.py[cod]

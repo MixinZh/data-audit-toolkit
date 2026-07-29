@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-audit-toolkit"
+version = "0.1.0"
+description = "Offline consistency checks for local tables, text, and images."
+requires-python = ">=3.10"
+dependencies = []
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["data-audit", "data-quality", "provenance", "agent-skill", "offline"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+
+[project.urls]
+Homepage = "https://github.com/MixinZh/data-audit-toolkit"
+"Documentation" = "https://github.com/MixinZh/data-audit-toolkit#readme"
+Issues = "https://github.com/MixinZh/data-audit-toolkit/issues"
+
+[project.optional-dependencies]
+images = ["Pillow>=10"]
+
+[project.scripts]
+data-audit = "data_audit_toolkit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+data_audit_toolkit = ["benchmark_data/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.pyc", "**/*.pyo"]

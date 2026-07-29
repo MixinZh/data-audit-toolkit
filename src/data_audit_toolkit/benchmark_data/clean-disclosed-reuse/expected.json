@@ -1,0 +1,28 @@
+{
+  "case_type": "clean",
+  "forbidden_kinds": [
+    "cross_panel_exact_reuse"
+  ],
+  "required_finding_fields": [
+    "classification",
+    "evidence",
+    "evidence_layer",
+    "kind",
+    "path",
+    "verdict_boundary"
+  ],
+  "required_kinds": [],
+  "required_not_checked": [],
+  "required_summary_fields": [
+    "blocked_files",
+    "counts_by_kind",
+    "evidence_layer_definitions",
+    "findings",
+    "inventory",
+    "not_checked",
+    "scanned_files",
+    "schema_version",
+    "unsupported_files",
+    "verdict_boundary"
+  ]
+}

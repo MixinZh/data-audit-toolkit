@@ -1,0 +1,24 @@
+{
+  "case_type": "synthetic_regression",
+  "forbidden_kinds": [
+    "embedded_instruction_ignored"
+  ],
+  "required_finding_fields": [
+    "evidence_layer",
+    "classification",
+    "verdict_boundary"
+  ],
+  "required_kinds": [
+    "fixed_difference_exact",
+    "terminal_digit_distribution",
+    "allegation_count_impossible",
+    "percentage_quantization_constraint",
+    "parallel_curve_shape",
+    "reverse_calculation_chain"
+  ],
+  "required_summary_fields": [
+    "evidence_layer_definitions",
+    "not_checked",
+    "inventory"
+  ]
+}

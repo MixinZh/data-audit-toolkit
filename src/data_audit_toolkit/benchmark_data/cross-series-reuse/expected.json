@@ -1,0 +1,20 @@
+{
+  "case_type": "synthetic_regression",
+  "forbidden_kinds": [
+    "embedded_instruction_ignored"
+  ],
+  "required_finding_fields": [
+    "evidence_layer",
+    "classification",
+    "verdict_boundary"
+  ],
+  "required_kinds": [
+    "cross_panel_exact_reuse",
+    "cross_panel_fixed_offset_chain"
+  ],
+  "required_summary_fields": [
+    "evidence_layer_definitions",
+    "not_checked",
+    "inventory"
+  ]
+}
