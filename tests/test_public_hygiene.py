@@ -119,20 +119,29 @@ class PublicHygieneTests(unittest.TestCase):
         }
         self.assertEqual(generated, declared)
 
-    def test_readme_uses_approved_neutral_positioning(self) -> None:
+    def test_readme_uses_plain_neutral_positioning(self) -> None:
         root = Path(__file__).resolve().parents[1]
         text = (root / "README.md").read_text(encoding="utf-8")
         folded = text.casefold()
         self.assertTrue(text.startswith("# Data Audit Toolkit\n"))
         self.assertIn(
-            "An offline toolkit for finding reproducible consistency leads across local tables, text, and images.",
+            "**Check local files for inconsistencies — without uploading them.**",
             text,
         )
         self.assertNotIn("research " + "audit", folded)
         self.assertNotIn("research " + "integrity", folded)
-        self.assertIn("No account, upload, API key, or model is required.", text)
+        self.assertIn("No account, upload, API key, or AI model is required.", text)
+        self.assertIn("Python 3.10 or newer", text)
+        self.assertIn(
+            "git clone https://github.com/MixinZh/data-audit-toolkit.git",
+            text,
+        )
+        self.assertLess(
+            text.index("## Quick start"),
+            text.index("## Optional: use it as an Agent Skill"),
+        )
 
-    def test_readme_preserves_the_approved_section_order(self) -> None:
+    def test_readme_preserves_newcomer_first_section_order(self) -> None:
         root = Path(__file__).resolve().parents[1]
         text = (root / "README.md").read_text(encoding="utf-8")
         headings = [
@@ -143,14 +152,16 @@ class PublicHygieneTests(unittest.TestCase):
         self.assertEqual(
             [
                 "# Data Audit Toolkit",
-                "## What it does",
+                "## What it can catch",
                 "## Quick start",
-                "### Use as a command-line tool",
-                "### Use as an Agent Skill",
-                "## Example result",
-                "## Supported inputs",
-                "## Privacy and boundaries",
-                "## Testing",
+                "### 1. Check the requirements",
+                "### 2. Download and install the toolkit",
+                "### 3. Try the included example",
+                "## Supported files",
+                "## Privacy and limits",
+                "## What is in the report",
+                "## Optional: use it as an Agent Skill",
+                "## For developers",
                 "## Contributing and security",
                 "## License",
             ],

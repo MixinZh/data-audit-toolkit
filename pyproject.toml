@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "data-audit-toolkit"
 version = "0.1.0"
-description = "Offline consistency checks for local tables, text, and images."
+description = "Check local tables, text, and images for inconsistencies without uploading them."
 requires-python = ">=3.10"
 dependencies = []
 readme = "README.md"
