@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from typing import Any
 
 from .common import finding
@@ -27,7 +28,29 @@ _RESULT_N_PATTERN = re.compile(
     r"results?\s+sample\s+count\s*:\s*n\s*=\s*(\d+)",
     re.IGNORECASE,
 )
-_P_VALUE_PATTERN = re.compile(r"\bp\s*[=<>]\s*(0(?:\.\d+)?|1(?:\.0+)?)", re.IGNORECASE)
+_P_VALUE_PATTERN = re.compile(
+    r"\bp\s*(?P<operator><=|>=|[=<>≤≥])\s*"
+    r"(?P<p_value>(?:0?(?:\.\d+)|0|1(?:\.0+)?))",
+    re.IGNORECASE,
+)
+_LOCAL_TEXT_BOUNDARY_PATTERN = re.compile(
+    r"(?<=[!?;])\s+|(?<=\.)\s+(?=[A-Z])|\n+"
+)
+_NEGATIVE_SIGNIFICANCE_PATTERN = re.compile(
+    r"\b(?:"
+    r"no\s+(?:statistically\s+)?significant(?:\s+difference)?|"
+    r"not\s+(?:statistically\s+)?significant(?:ly)?"
+    r"(?:\s+different)?|"
+    r"non[- ]significant|"
+    r"fail(?:ed|s)?\s+to\s+(?:reach|achieve)\s+"
+    r"(?:statistical\s+)?significance"
+    r")\b",
+    re.IGNORECASE,
+)
+_POSITIVE_SIGNIFICANCE_PATTERN = re.compile(
+    r"\b(?:statistically\s+)?significant(?:ly)?\b",
+    re.IGNORECASE,
+)
 _MALFORMED_REFERENCE_PATTERN = re.compile(
     r"\breference\s*:\s*([^\s.;,]+)",
     re.IGNORECASE,
@@ -38,9 +61,100 @@ def _normal_test_label(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
+def _local_text_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for boundary in _LOCAL_TEXT_BOUNDARY_PATTERN.finditer(text):
+        if boundary.start() > start:
+            spans.append((start, boundary.start()))
+        start = boundary.end()
+    if start < len(text):
+        spans.append((start, len(text)))
+    return spans
+
+
+def _claim_language_candidates(
+    text: str,
+    span_start: int,
+    span_end: int,
+) -> list[tuple[int, int, int, str]]:
+    local_text = text[span_start:span_end]
+    negative_matches = list(_NEGATIVE_SIGNIFICANCE_PATTERN.finditer(local_text))
+    candidates: list[tuple[int, int, int, str]] = []
+    for match in negative_matches:
+        absolute_start = span_start + match.start()
+        absolute_end = span_start + match.end()
+        candidates.append(
+            (absolute_start, absolute_end, 0, "not significant")
+        )
+    negative_index = 0
+    for match in _POSITIVE_SIGNIFICANCE_PATTERN.finditer(local_text):
+        while (
+            negative_index < len(negative_matches)
+            and negative_matches[negative_index].end() <= match.start()
+        ):
+            negative_index += 1
+        if (
+            negative_index < len(negative_matches)
+            and negative_matches[negative_index].start() <= match.start()
+            and match.end() <= negative_matches[negative_index].end()
+        ):
+            continue
+        absolute_start = span_start + match.start()
+        absolute_end = span_start + match.end()
+        candidates.append((absolute_start, absolute_end, 1, "significant"))
+    return sorted(candidates)
+
+
+def _claim_language(
+    candidates: list[tuple[int, int, int, str]],
+    candidate_starts: list[int],
+    p_start: int,
+    p_end: int,
+) -> str | None:
+    if not candidates:
+        return None
+    insertion = bisect_left(candidate_starts, p_start)
+    nearby = candidates[max(0, insertion - 1) : insertion + 1]
+
+    def ranked(
+        candidate: tuple[int, int, int, str],
+    ) -> tuple[int, int, str]:
+        start, end, priority, language = candidate
+        if end <= p_start:
+            distance = p_start - end
+        elif start >= p_end:
+            distance = start - p_end
+        else:
+            distance = 0
+        return distance, priority, language
+
+    return min(ranked(candidate) for candidate in nearby)[2]
+
+
+def _p_relation_to_alpha(
+    operator: str,
+    p_value: float,
+    alpha: float,
+) -> str | None:
+    if operator == "=":
+        if p_value < alpha:
+            return "below"
+        if p_value > alpha:
+            return "at_or_above"
+        return None
+    if operator in {"<", "<="} and p_value <= alpha:
+        return "below"
+    if operator in {">", ">="} and p_value >= alpha:
+        return "at_or_above"
+    return None
+
+
 def check_text(
     text: str,
     path: str,
+    *,
+    significance_alpha: float = 0.05,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     findings: list[dict[str, Any]] = []
     not_checked: list[dict[str, Any]] = []
@@ -107,34 +221,72 @@ def check_text(
                 )
             )
 
-    p_match = _P_VALUE_PATTERN.search(text)
-    if p_match is not None:
-        p_value = float(p_match.group(1))
-        lowered = text.casefold()
-        says_not_significant = "not significant" in lowered
-        says_significant = (
-            "significant" in lowered and not says_not_significant
+    if not 0 < significance_alpha < 1:
+        raise ValueError("significance_alpha must be between 0 and 1")
+    local_spans = _local_text_spans(text)
+    span_index = 0
+    candidate_span: tuple[int, int] | None = None
+    candidates: list[tuple[int, int, int, str]] = []
+    candidate_starts: list[int] = []
+    line = 1
+    line_cursor = 0
+    for p_match in _P_VALUE_PATTERN.finditer(text):
+        operator = p_match.group("operator").replace("≤", "<=").replace("≥", ">=")
+        p_value = float(p_match.group("p_value"))
+        while (
+            span_index < len(local_spans)
+            and p_match.start() >= local_spans[span_index][1]
+        ):
+            span_index += 1
+        if (
+            span_index < len(local_spans)
+            and local_spans[span_index][0] <= p_match.start()
+        ):
+            local_span = local_spans[span_index]
+        else:
+            local_span = (0, len(text))
+        if local_span != candidate_span:
+            candidates = _claim_language_candidates(
+                text,
+                local_span[0],
+                local_span[1],
+            )
+            candidate_starts = [candidate[0] for candidate in candidates]
+            candidate_span = local_span
+        language = _claim_language(
+            candidates,
+            candidate_starts,
+            p_match.start(),
+            p_match.end(),
+        )
+        relation = _p_relation_to_alpha(
+            operator,
+            p_value,
+            significance_alpha,
         )
         conflict = (
-            (says_significant and p_value >= 0.05)
-            or (says_not_significant and p_value < 0.05)
+            language == "significant" and relation == "at_or_above"
+        ) or (
+            language == "not significant" and relation == "below"
         )
-        if conflict:
-            findings.append(
-                finding(
-                    "significance_language_conflict",
-                    path,
-                    {
-                        "language": (
-                            "not significant"
-                            if says_not_significant
-                            else "significant"
-                        ),
-                        "p_value": p_value,
-                    },
-                    evidence_layer="source_says",
-                )
+        if not conflict:
+            continue
+        line += text.count("\n", line_cursor, p_match.start())
+        line_cursor = p_match.start()
+        findings.append(
+            finding(
+                "significance_language_conflict",
+                path,
+                {
+                    "alpha": significance_alpha,
+                    "language": language,
+                    "line": line,
+                    "operator": operator,
+                    "p_value": p_value,
+                },
+                evidence_layer="source_says",
             )
+        )
 
     ambiguous_markers = (
         ("low-resolution similarity", "low_resolution_similarity"),

@@ -14,7 +14,8 @@ common-image checks require Pillow. No network access is required.
    the skill directory. Keep the report with the reviewed inputs.
 3. Inspect `inventory`, `not_checked`, `scanned_files`, `unsupported_files`,
    `blocked_files`, and coverage before discussing findings. Read
-   [supported inputs](references/supported-inputs.md) for limits.
+   [supported inputs](references/supported-inputs.md) for limits. A parsed file
+   is not proof that every claim or column matched an applicable semantic rule.
 4. Verify a strong lead against the relevant source files and test plausible
    benign explanations before escalating it.
 5. Separate computed observation, source statement, reviewer interpretation,
@@ -25,4 +26,5 @@ common-image checks require Pillow. No network access is required.
    misconduct, or a final judgment.
 
 Use `python3 scripts/check_benchmark_suite.py` only to verify the packaged
-deterministic benchmark; it does not validate a user's files.
+deterministic regression benchmark; it does not measure accuracy or validate a
+user's files.

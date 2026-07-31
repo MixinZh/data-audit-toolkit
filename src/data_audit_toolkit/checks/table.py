@@ -3,15 +3,18 @@ from __future__ import annotations
 import itertools
 import math
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from typing import Any
 
 from ..models import ScanLimits
 from .common import (
     decimal_suffix,
+    displayed_precision_tolerance,
     finding,
     numbers_equal,
     parse_number,
     terminal_digit,
+    within_displayed_precision,
 )
 from .text import check_text
 
@@ -28,21 +31,76 @@ def _rectangular_rows(rows: list[list[str]]) -> tuple[list[str], list[list[str]]
     return headers, normalized[1:]
 
 
-def _column_values(
+@dataclass(frozen=True)
+class _Column:
+    index: int
+    label: str
+    raw_values: tuple[str, ...]
+    numeric_by_row: dict[int, float]
+
+
+def _columns(
     headers: list[str],
     rows: list[list[str]],
-) -> dict[str, list[str]]:
-    return {
-        header: [row[index].strip() for row in rows]
+) -> list[_Column]:
+    columns: list[_Column] = []
+    for index, header in enumerate(headers):
+        raw_values = tuple(row[index].strip() for row in rows)
+        numeric_by_row = {
+            row_number: parsed
+            for row_number, raw_value in enumerate(raw_values, 2)
+            if (parsed := parse_number(raw_value)) is not None
+        }
+        columns.append(
+            _Column(
+                index=index,
+                label=header,
+                raw_values=raw_values,
+                numeric_by_row=numeric_by_row,
+            )
+        )
+    return columns
+
+
+def _unique_header_index(headers: list[str], label: str) -> int | None:
+    indexes = [
+        index
         for index, header in enumerate(headers)
-    }
+        if header == label
+    ]
+    return indexes[0] if len(indexes) == 1 else None
 
 
-def _numeric_column(values: list[str]) -> list[float] | None:
-    parsed = [parse_number(value) for value in values]
-    if not values or any(value is None for value in parsed):
-        return None
-    return [value for value in parsed if value is not None]
+def _has_repeated_contiguous_sequence(
+    column: _Column,
+    *,
+    sequence_length: int,
+    max_values: int,
+) -> bool:
+    if sequence_length <= 0:
+        return False
+    bounded_rows = sorted(column.numeric_by_row)[:max_values]
+    runs: list[list[float]] = []
+    previous_row: int | None = None
+    for row in bounded_rows:
+        if previous_row is None or row != previous_row + 1:
+            runs.append([])
+        runs[-1].append(column.numeric_by_row[row])
+        previous_row = row
+    for values in runs:
+        if len(values) < sequence_length * 2:
+            continue
+        for start in range(len(values) - sequence_length + 1):
+            sequence = values[start : start + sequence_length]
+            for second_start in range(
+                start + sequence_length,
+                len(values) - sequence_length + 1,
+            ):
+                if sequence == values[
+                    second_start : second_start + sequence_length
+                ]:
+                    return True
+    return False
 
 
 def _add_once(
@@ -59,10 +117,10 @@ def _check_label_mapping(
     rows: list[list[str]],
     findings: list[dict[str, Any]],
 ) -> None:
-    if not {"displayed_label", "source_label"}.issubset(headers):
+    displayed_index = _unique_header_index(headers, "displayed_label")
+    source_index = _unique_header_index(headers, "source_label")
+    if displayed_index is None or source_index is None:
         return
-    displayed_index = headers.index("displayed_label")
-    source_index = headers.index("source_label")
     for row_number, row in enumerate(rows, 2):
         displayed = row[displayed_index].strip()
         source = row[source_index].strip()
@@ -89,13 +147,13 @@ def _check_reported_means(
     rows: list[list[str]],
     findings: list[dict[str, Any]],
 ) -> None:
-    if not {"series_label", "value", "reported_mean"}.issubset(headers):
+    label_index = _unique_header_index(headers, "series_label")
+    value_index = _unique_header_index(headers, "value")
+    mean_index = _unique_header_index(headers, "reported_mean")
+    if label_index is None or value_index is None or mean_index is None:
         return
-    label_index = headers.index("series_label")
-    value_index = headers.index("value")
-    mean_index = headers.index("reported_mean")
     grouped_values: dict[str, list[float]] = defaultdict(list)
-    reported: dict[str, float] = {}
+    reported: dict[str, tuple[float, str]] = {}
     for row in rows:
         value = parse_number(row[value_index])
         mean = parse_number(row[mean_index])
@@ -103,14 +161,16 @@ def _check_reported_means(
         if label and value is not None:
             grouped_values[label].append(value)
         if label and mean is not None:
-            reported[label] = mean
+            reported[label] = (mean, row[mean_index].strip())
     for label in sorted(grouped_values):
         if label not in reported or not grouped_values[label]:
             continue
         calculated = sum(grouped_values[label]) / len(grouped_values[label])
         if not math.isfinite(calculated):
             continue
-        if not numbers_equal(calculated, reported[label]):
+        reported_mean, reported_raw = reported[label]
+        if not within_displayed_precision(calculated, reported_raw):
+            tolerance = displayed_precision_tolerance(reported_raw)
             _add_once(
                 findings,
                 finding(
@@ -118,9 +178,9 @@ def _check_reported_means(
                     path,
                     {
                         "calculated_mean": calculated,
-                        "reported_mean": reported[label],
+                        "reported_mean": reported_mean,
                         "series_label": label,
-                        "tolerance": 1e-09,
+                        "tolerance": tolerance,
                     },
                     evidence_layer="data_show",
                 ),
@@ -129,24 +189,50 @@ def _check_reported_means(
 
 def _check_numeric_columns(
     path: str,
-    columns: dict[str, list[str]],
+    columns: list[_Column],
     limits: ScanLimits,
     findings: list[dict[str, Any]],
 ) -> None:
-    numeric = {
-        label: values
-        for label, raw_values in columns.items()
-        if (values := _numeric_column(raw_values)) is not None
-    }
-    for (first_label, first), (second_label, second) in itertools.combinations(
-        numeric.items(),
+    numeric = [
+        column
+        for column in columns
+        if column.numeric_by_row
+    ]
+    for first, second in itertools.combinations(
+        numeric,
         2,
     ):
-        pair_count = min(len(first), len(second), limits.max_pair_rows)
+        all_overlap_rows = sorted(
+            set(first.numeric_by_row) & set(second.numeric_by_row)
+        )
+        required_overlap = max(
+            2,
+            math.ceil(
+                max(
+                    len(first.numeric_by_row),
+                    len(second.numeric_by_row),
+                )
+                * limits.min_pair_overlap_ratio
+            ),
+        )
+        if len(all_overlap_rows) < required_overlap:
+            continue
+        overlap_rows = all_overlap_rows[: limits.max_pair_rows]
+        pair_count = len(overlap_rows)
         if pair_count < 2:
             continue
-        first_bounded = first[:pair_count]
-        second_bounded = second[:pair_count]
+        first_bounded = [
+            first.numeric_by_row[row]
+            for row in overlap_rows
+        ]
+        second_bounded = [
+            second.numeric_by_row[row]
+            for row in overlap_rows
+        ]
+        pair_evidence = {
+            "column_indices": [first.index + 1, second.index + 1],
+            "columns": [first.label, second.label],
+        }
         if first_bounded == second_bounded:
             _add_once(
                 findings,
@@ -154,15 +240,22 @@ def _check_numeric_columns(
                     "duplicate_numeric_columns",
                     path,
                     {
-                        "columns": [first_label, second_label],
+                        **pair_evidence,
                         "row_count": pair_count,
+                        "rows": overlap_rows,
                     },
                     evidence_layer="data_show",
                 ),
             )
 
-        raw_first = columns[first_label][:pair_count]
-        raw_second = columns[second_label][:pair_count]
+        raw_first = [
+            first.raw_values[row - 2]
+            for row in overlap_rows
+        ]
+        raw_second = [
+            second.raw_values[row - 2]
+            for row in overlap_rows
+        ]
         suffix_matches = sum(
             decimal_suffix(left) is not None
             and decimal_suffix(left) == decimal_suffix(right)
@@ -179,7 +272,7 @@ def _check_numeric_columns(
                     "paired_fractional_suffix_match",
                     path,
                     {
-                        "columns": [first_label, second_label],
+                        **pair_evidence,
                         "matching_rows": pair_count,
                     },
                     evidence_layer="data_show",
@@ -202,7 +295,7 @@ def _check_numeric_columns(
                     "fixed_difference_exact",
                     path,
                     {
-                        "columns": [first_label, second_label],
+                        **pair_evidence,
                         "difference": differences[0],
                         "row_count": pair_count,
                     },
@@ -234,7 +327,7 @@ def _check_numeric_columns(
                         "parallel_curve_shape",
                         path,
                         {
-                            "columns": [first_label, second_label],
+                            **pair_evidence,
                             "difference_count": len(first_shape),
                         },
                         evidence_layer="data_show",
@@ -266,7 +359,7 @@ def _check_numeric_columns(
                         "ratio_consistency_outliers",
                         path,
                         {
-                            "columns": [first_label, second_label],
+                            **pair_evidence,
                             "dominant_ratio": dominant,
                             "outlier_count": len(material_outliers),
                         },
@@ -274,26 +367,26 @@ def _check_numeric_columns(
                     ),
                 )
 
-    for label, values in numeric.items():
-        bounded = values[: limits.max_sequence_values]
+    for column in numeric:
+        bounded_rows = sorted(column.numeric_by_row)[
+            : limits.max_sequence_values
+        ]
+        bounded = [
+            column.numeric_by_row[row]
+            for row in bounded_rows
+        ]
         sequence_length = limits.min_sequence
-        repeated = False
-        if sequence_length > 0 and len(bounded) >= sequence_length * 2:
-            for start in range(len(bounded) - sequence_length + 1):
-                sequence = bounded[start : start + sequence_length]
-                for second_start in range(start + sequence_length, len(bounded) - sequence_length + 1):
-                    if sequence == bounded[second_start : second_start + sequence_length]:
-                        repeated = True
-                        break
-                if repeated:
-                    break
-        if repeated:
+        if _has_repeated_contiguous_sequence(
+            column,
+            sequence_length=sequence_length,
+            max_values=limits.max_sequence_values,
+        ):
             _add_once(
                 findings,
                 finding(
                     "repeated_numeric_sequence",
                     path,
-                    {"column": label, "length": sequence_length},
+                    {"column": column.label, "length": sequence_length},
                     evidence_layer="data_show",
                 ),
             )
@@ -301,7 +394,10 @@ def _check_numeric_columns(
         if len(bounded) >= limits.min_n:
             terminal_digits = [
                 digit
-                for raw_value in columns[label][: len(bounded)]
+                for raw_value in (
+                    column.raw_values[row - 2]
+                    for row in bounded_rows
+                )
                 if (digit := terminal_digit(raw_value)) is not None
             ]
             if len(terminal_digits) < limits.min_n:
@@ -315,12 +411,13 @@ def _check_numeric_columns(
                         "terminal_digit_spike",
                         path,
                         {
-                            "column": label,
+                            "column": column.label,
                             "digit": digit,
                             "n": len(terminal_digits),
                             "observed": count,
                         },
                         evidence_layer="data_show",
+                        classification="informational",
                     ),
                 )
             concentration = sum(
@@ -334,17 +431,18 @@ def _check_numeric_columns(
                         "terminal_digit_distribution",
                         path,
                         {
-                            "column": label,
+                            "column": column.label,
                             "concentration": round(concentration, 6),
                             "n": len(terminal_digits),
                         },
                         evidence_layer="data_show",
+                        classification="informational",
                     ),
                 )
 
         suffixes = [
             suffix
-            for value in columns[label]
+            for value in column.raw_values
             if (suffix := decimal_suffix(value)) is not None
         ]
         if (
@@ -358,7 +456,7 @@ def _check_numeric_columns(
                     "group_decimal_suffix_uniformity",
                     path,
                     {
-                        "column": label,
+                        "column": column.label,
                         "row_count": len(suffixes),
                         "suffix": suffixes[0],
                     },
@@ -373,8 +471,16 @@ def _check_named_calculations(
     rows: list[list[str]],
     findings: list[dict[str, Any]],
 ) -> None:
-    if {"component_a", "component_b", "total"}.issubset(headers):
-        indexes = [headers.index(name) for name in ("component_a", "component_b", "total")]
+    component_indexes = [
+        _unique_header_index(headers, name)
+        for name in ("component_a", "component_b", "total")
+    ]
+    if all(index is not None for index in component_indexes):
+        indexes = [
+            index
+            for index in component_indexes
+            if index is not None
+        ]
         valid_rows = 0
         for row in rows:
             values = [parse_number(row[index]) for index in indexes]
@@ -391,17 +497,14 @@ def _check_named_calculations(
                     path,
                     {"reconstructed_rows": valid_rows},
                     evidence_layer="data_show",
+                    classification="informational",
                 ),
             )
 
-    disclosure_index = (
-        headers.index("formula_disclosed")
-        if "formula_disclosed" in headers
-        else None
-    )
-    if {"total_count", "displayed_percentage"}.issubset(headers):
-        total_index = headers.index("total_count")
-        percentage_index = headers.index("displayed_percentage")
+    disclosure_index = _unique_header_index(headers, "formula_disclosed")
+    total_index = _unique_header_index(headers, "total_count")
+    percentage_index = _unique_header_index(headers, "displayed_percentage")
+    if total_index is not None and percentage_index is not None:
         qualifying: list[tuple[int, float]] = []
         for row in rows:
             if (
@@ -436,13 +539,16 @@ def _check_named_calculations(
                             "total_count": total,
                         },
                         evidence_layer="data_show",
+                        classification="informational",
                     ),
                 )
 
-    if {"total_count", "event_count", "displayed_percentage"}.issubset(headers):
-        total_index = headers.index("total_count")
-        event_index = headers.index("event_count")
-        percentage_index = headers.index("displayed_percentage")
+    event_index = _unique_header_index(headers, "event_count")
+    if (
+        total_index is not None
+        and event_index is not None
+        and percentage_index is not None
+    ):
         for row_number, row in enumerate(rows, 2):
             if (
                 disclosure_index is not None
@@ -464,7 +570,8 @@ def _check_named_calculations(
             implied = event_count / total * 100.0
             if not math.isfinite(implied):
                 continue
-            if not numbers_equal(implied, percentage):
+            displayed_raw = row[percentage_index].strip()
+            if not within_displayed_precision(implied, displayed_raw):
                 _add_once(
                     findings,
                     finding(
@@ -475,6 +582,9 @@ def _check_named_calculations(
                             "event_count": int(event_count),
                             "implied_percentage": implied,
                             "row": row_number,
+                            "tolerance": displayed_precision_tolerance(
+                                displayed_raw
+                            ),
                             "total_count": int(total),
                         },
                         evidence_layer="data_show",
@@ -490,22 +600,25 @@ def _check_cross_panel(
     limits: ScanLimits,
     findings: list[dict[str, Any]],
 ) -> None:
-    required = {"panel", "series_label", "index", "value"}
-    if not required.issubset(headers):
+    panel_index = _unique_header_index(headers, "panel")
+    label_index = _unique_header_index(headers, "series_label")
+    order_index = _unique_header_index(headers, "index")
+    value_index = _unique_header_index(headers, "value")
+    if any(
+        index is None
+        for index in (panel_index, label_index, order_index, value_index)
+    ):
         return
-    disclosure_index = (
-        headers.index("reuse_disclosed")
-        if "reuse_disclosed" in headers
-        else None
-    )
-    panel_index = headers.index("panel")
-    label_index = headers.index("series_label")
-    order_index = headers.index("index")
-    value_index = headers.index("value")
+    assert panel_index is not None
+    assert label_index is not None
+    assert order_index is not None
+    assert value_index is not None
+    disclosure_index = _unique_header_index(headers, "reuse_disclosed")
     grouped: dict[
         tuple[str, str],
-        list[tuple[float, float, bool]],
-    ] = defaultdict(list)
+        dict[float, tuple[float, bool]],
+    ] = defaultdict(dict)
+    duplicate_index_groups: set[tuple[str, str]] = set()
     for row in rows:
         order = parse_number(row[order_index])
         value = parse_number(row[value_index])
@@ -516,25 +629,29 @@ def _check_cross_panel(
                 and row[disclosure_index].strip().casefold()
                 in {"yes", "true", "disclosed"}
             )
-            grouped[key].append((order, value, disclosed))
+            if order in grouped[key]:
+                duplicate_index_groups.add(key)
+                continue
+            grouped[key][order] = (value, disclosed)
     series = {
-        key: [
-            (value, disclosed)
-            for _, value, disclosed in sorted(items)
-        ]
+        key: items
         for key, items in grouped.items()
+        if key not in duplicate_index_groups
     }
     for (first_key, first), (second_key, second) in itertools.combinations(
         sorted(series.items()),
         2,
     ):
-        if first_key[1] == second_key[1]:
+        if first_key[0] == second_key[0] or first_key[1] == second_key[1]:
             continue
-        pair_count = min(len(first), len(second), limits.max_pair_rows)
+        matching_indexes = sorted(set(first) & set(second))[
+            : limits.max_pair_rows
+        ]
+        pair_count = len(matching_indexes)
         if pair_count < limits.min_sequence:
             continue
-        first_pairs = first[:pair_count]
-        second_pairs = second[:pair_count]
+        first_pairs = [first[index] for index in matching_indexes]
+        second_pairs = [second[index] for index in matching_indexes]
         if all(
             first_disclosed or second_disclosed
             for (_, first_disclosed), (_, second_disclosed)
@@ -590,15 +707,16 @@ def check_table(
     findings, not_checked = check_text(
         "\n".join("\t".join(row) for row in rows),
         path,
+        significance_alpha=limits.significance_alpha,
     )
-    columns = _column_values(headers, data_rows)
+    columns = _columns(headers, data_rows)
     cross_panel_fields = {"panel", "series_label", "index", "value"}
     generic_numeric_columns = (
-        {
-            label: values
-            for label, values in columns.items()
-            if label not in {"index", "value"}
-        }
+        [
+            column
+            for column in columns
+            if column.label not in {"index", "value"}
+        ]
         if cross_panel_fields.issubset(headers)
         else columns
     )

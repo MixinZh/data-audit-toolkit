@@ -22,6 +22,20 @@ from .output import (
 )
 
 
+def _significance_alpha(value: str) -> float:
+    try:
+        alpha = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "significance alpha must be a number between 0 and 1"
+        ) from exc
+    if not 0 < alpha < 1:
+        raise argparse.ArgumentTypeError(
+            "significance alpha must be between 0 and 1"
+        )
+    return alpha
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="data-audit",
@@ -47,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-sequence",
         type=int,
         default=DEFAULT_LIMITS.min_sequence,
+    )
+    scan_parser.add_argument(
+        "--significance-alpha",
+        type=_significance_alpha,
+        default=DEFAULT_LIMITS.significance_alpha,
     )
     scan_parser.add_argument(
         "--max-sequence-values",
@@ -76,6 +95,7 @@ def _run_scan(args: argparse.Namespace) -> int:
         min_n=args.min_n,
         min_group_n=args.min_group_n,
         min_sequence=args.min_sequence,
+        significance_alpha=args.significance_alpha,
         max_sequence_values=args.max_sequence_values,
         max_pair_rows=args.max_pair_rows,
         tile_size=args.tile_size,
@@ -116,15 +136,16 @@ def _run_scan(args: argparse.Namespace) -> int:
 
 
 def _run_benchmark() -> int:
+    payload = run_benchmark()
     print(
         json.dumps(
-            run_benchmark(),
+            payload,
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
         )
     )
-    return 0
+    return 1 if payload["failures"] else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

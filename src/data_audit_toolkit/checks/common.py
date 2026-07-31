@@ -97,3 +97,37 @@ def numbers_equal(first: float, second: float, tolerance: float = 1e-9) -> bool:
     if not math.isfinite(first) or not math.isfinite(second):
         return False
     return math.isclose(first, second, rel_tol=tolerance, abs_tol=tolerance)
+
+
+def displayed_precision_tolerance(value: str) -> float | None:
+    candidate = value.strip().replace(",", "")
+    if candidate.endswith("%"):
+        candidate = candidate[:-1].strip()
+    try:
+        number = Decimal(candidate)
+    except InvalidOperation:
+        return None
+    if not number.is_finite():
+        return None
+    try:
+        tolerance = float(
+            abs(Decimal(1).scaleb(number.as_tuple().exponent)) / 2
+        )
+    except (InvalidOperation, OverflowError, ValueError):
+        return None
+    return tolerance if math.isfinite(tolerance) else None
+
+
+def within_displayed_precision(actual: float, displayed: str) -> bool:
+    expected = parse_number(displayed)
+    if expected is not None and actual == expected:
+        return True
+    tolerance = displayed_precision_tolerance(displayed)
+    if (
+        expected is None
+        or tolerance is None
+        or not math.isfinite(actual)
+    ):
+        return False
+    floating_slack = max(math.ulp(actual), math.ulp(expected)) * 4
+    return abs(actual - expected) <= tolerance + floating_slack

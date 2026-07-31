@@ -143,6 +143,78 @@ class CliBasicsTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn('"failures": {}', stdout.getvalue())
 
+    def test_benchmark_command_fails_when_a_case_fails(self) -> None:
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(
+                cli,
+                "run_benchmark",
+                return_value={
+                    "case_count": 1,
+                    "failures": {"case-1": ["missing expected finding"]},
+                },
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            code = main(["benchmark"])
+        self.assertEqual(1, code)
+        self.assertIn('"case-1"', stdout.getvalue())
+
+    def test_scan_accepts_a_configured_significance_alpha(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "report.md"
+            output = root / "report.json"
+            source.write_text(
+                "The result was significant (p = 0.02).\n",
+                encoding="utf-8",
+            )
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = main(
+                        [
+                            "scan",
+                            str(source),
+                            "--output",
+                            str(output),
+                            "--significance-alpha",
+                            "0.01",
+                        ]
+                    )
+            except SystemExit as exc:
+                self.fail(
+                    "scan must accept --significance-alpha: "
+                    f"SystemExit({exc.code})"
+                )
+            report = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        conflict = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "significance_language_conflict"
+        )
+        self.assertEqual(0.01, conflict["evidence"]["alpha"])
+
+    def test_significance_alpha_must_be_between_zero_and_one(self) -> None:
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            build_parser().parse_args(
+                [
+                    "scan",
+                    "report.md",
+                    "--output",
+                    "report.json",
+                    "--significance-alpha",
+                    "1",
+                ]
+            )
+        self.assertEqual(2, raised.exception.code)
+        self.assertIn("between 0 and 1", stderr.getvalue())
+
     def test_output_cannot_replace_an_explicit_input_even_with_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "values.csv"

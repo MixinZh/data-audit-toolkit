@@ -2,9 +2,11 @@
 
 **Check local files for inconsistencies — without uploading them.**
 
-Data Audit Toolkit is a free command-line tool that scans spreadsheets, text
-files, and images on your computer. It points you to patterns that may deserve a
-closer look and tells you which files it could not inspect.
+Data Audit Toolkit is a free, experimental, schema-aware command-line checker
+for spreadsheets, text files, and images on your computer. It applies
+deterministic rules when an input matches a supported structure, points to
+patterns that may deserve a closer look, and tells you which files it could not
+inspect.
 
 No account, upload, API key, or AI model is required.
 
@@ -23,9 +25,11 @@ The toolkit can flag examples such as:
 - repeated regions inside an image, when optional image support is installed
 - files that were missing, unsupported, unreadable, or stopped by a safety limit
 
-The report shows the source file and relevant cells, rows, or lines for each
-lead. The same files and settings produce the same result, so another reviewer
-can repeat the check.
+The report always names the source file. Location detail varies by check: newer
+table comparisons include column indexes and rows, and statistical-language
+checks include line numbers, while some aggregate checks currently report only
+the affected columns or counts. The same files and settings produce the same
+result, so another reviewer can repeat the check.
 
 ## Quick start
 
@@ -37,6 +41,8 @@ You need:
 
 - [Python 3.10 or newer](https://www.python.org/downloads/)
 - [Git](https://git-scm.com/downloads), or GitHub's **Download ZIP** option
+- Linux or macOS. Windows is not currently supported by the secure filesystem
+  traversal backend.
 
 Check your Python version:
 
@@ -91,7 +97,18 @@ data-audit scan /path/to/your/files \
 ```
 
 The input can be one file, one folder, or several file and folder paths. The
-output report must be saved outside the folder being scanned.
+output report is automatically excluded from the current scan. Saving it outside
+the scanned folder is still recommended so input and generated output remain
+visibly separate.
+
+Statistical-language checks use `0.05` as the default significance threshold.
+Set a different threshold when the analysis requires one:
+
+```bash
+data-audit scan /path/to/your/files \
+  --output audit-report.json \
+  --significance-alpha 0.01
+```
 
 ## Supported files
 
@@ -120,6 +137,11 @@ list of limits.
 - Safety and size limits stop unusually large or unsafe inputs from being
   opened.
 - Unsupported or blocked files remain visible under `not_checked`.
+- A file listed under `scanned_files` was parsed successfully; this does not
+  mean that every claim or column matched an applicable semantic check.
+- Terminal-digit patterns, percentage quantization, reverse-calculation chains,
+  and repeated image tiles are informational signals, not default consistency
+  leads.
 - Every lead needs human review and a check of plausible ordinary explanations.
 
 ## What is in the report
@@ -165,8 +187,8 @@ python3 -m unittest discover -s tests -v
 python3 scripts/check_benchmark_suite.py
 ```
 
-The benchmark contains 19 synthetic cases. It checks the packaged behavior, not
-a user's files.
+The benchmark contains 19 synthetic cases. It checks packaged regression
+behavior, not a user's files, detector accuracy, precision, or recall.
 
 ## Contributing and security
 

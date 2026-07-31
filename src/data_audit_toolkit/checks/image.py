@@ -61,6 +61,7 @@ def check_image(
                             "tile_size": tile_size,
                         },
                         evidence_layer="data_show",
+                        classification="informational",
                     )
                 ], None
             seen[tile] = (x, y)

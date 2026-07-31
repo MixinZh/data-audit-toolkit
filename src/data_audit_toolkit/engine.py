@@ -99,7 +99,11 @@ def _scan_snapshot(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
     try:
         if suffix in _TEXT_SUFFIXES:
-            findings, not_checked = check_text(_decode_utf8(source), public_path)
+            findings, not_checked = check_text(
+                _decode_utf8(source),
+                public_path,
+                significance_alpha=limits.significance_alpha,
+            )
             return findings, not_checked, None
         if suffix in _TABLE_SUFFIXES:
             findings, not_checked = check_table(

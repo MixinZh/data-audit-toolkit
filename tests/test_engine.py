@@ -5,6 +5,7 @@ import importlib.util
 import json
 import struct
 import tempfile
+import time
 import unittest
 import zlib
 import zipfile
@@ -90,11 +91,17 @@ def _write_malformed_xlsx(path: Path) -> None:
 
 
 class EngineReportTests(unittest.TestCase):
-    def _scan_text(self, content: str, suffix: str = ".md") -> dict[str, object]:
+    def _scan_text(
+        self,
+        content: str,
+        suffix: str = ".md",
+        *,
+        limits: ScanLimits = ScanLimits(),
+    ) -> dict[str, object]:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / f"report_section{suffix}"
             source.write_text(content, encoding="utf-8", newline="\n")
-            return scan_paths([source])
+            return scan_paths([source], limits=limits)
 
     def _scan_csv(
         self,
@@ -204,8 +211,144 @@ class EngineReportTests(unittest.TestCase):
         report = self._scan_text("The result was significant (p=0.21).")
         self.assert_has_kind(report, "significance_language_conflict")
         self.assertEqual(
-            {"language": "significant", "p_value": 0.21},
+            {
+                "alpha": 0.05,
+                "language": "significant",
+                "line": 1,
+                "operator": "=",
+                "p_value": 0.21,
+            },
             report["findings"][0]["evidence"],
+        )
+
+    def test_less_than_threshold_supports_significant_wording(self) -> None:
+        report = self._scan_text(
+            "The result was significant (p < 0.05)."
+        )
+        self.assertNotIn(
+            "significance_language_conflict",
+            [item["kind"] for item in report["findings"]],
+        )
+
+    def test_common_negative_significance_phrases_are_not_false_positives(
+        self,
+    ) -> None:
+        statements = (
+            "There was no significant difference (p = 0.80).",
+            "The result was not statistically significant (p = 0.80).",
+            "The result failed to reach significance (p = 0.80).",
+        )
+        for statement in statements:
+            with self.subTest(statement=statement):
+                report = self._scan_text(statement)
+                self.assertNotIn(
+                    "significance_language_conflict",
+                    [item["kind"] for item in report["findings"]],
+                )
+
+    def test_adverbial_significance_conflicts_with_high_p_value(self) -> None:
+        report = self._scan_text(
+            "The groups were significantly different (p = 0.80)."
+        )
+        self.assert_has_kind(report, "significance_language_conflict")
+        conflict = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "significance_language_conflict"
+        )
+        self.assertEqual("significant", conflict["evidence"]["language"])
+
+    def test_adverbial_negative_significance_conflicts_with_low_p_value(
+        self,
+    ) -> None:
+        report = self._scan_text(
+            "The groups were not significantly different (p = 0.01)."
+        )
+        self.assert_has_kind(report, "significance_language_conflict")
+        conflict = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "significance_language_conflict"
+        )
+        self.assertEqual("not significant", conflict["evidence"]["language"])
+
+    def test_each_p_value_is_paired_with_its_local_claim(self) -> None:
+        report = self._scan_text(
+            "The first result was significant (p = 0.01). "
+            "The second result was significant (p = 0.80)."
+        )
+        conflicts = [
+            item
+            for item in report["findings"]
+            if item["kind"] == "significance_language_conflict"
+        ]
+        self.assertEqual(1, len(conflicts))
+        self.assertEqual(0.80, conflicts[0]["evidence"]["p_value"])
+
+    def test_significance_alpha_is_configurable(self) -> None:
+        try:
+            limits = ScanLimits(significance_alpha=0.01)
+        except TypeError as exc:
+            self.fail(f"ScanLimits must accept significance_alpha: {exc}")
+        report = self._scan_text(
+            "The result was significant (p = 0.02).",
+            limits=limits,
+        )
+        conflict = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "significance_language_conflict"
+        )
+        self.assertEqual(0.01, conflict["evidence"]["alpha"])
+
+    def test_multiline_p_value_checks_scale_below_quadratic_growth(self) -> None:
+        def elapsed(line_count: int) -> float:
+            content = "\n".join(
+                "The result was significant (p = 0.80)."
+                for _ in range(line_count)
+            )
+            started = time.perf_counter()
+            report = self._scan_text(content)
+            duration = time.perf_counter() - started
+            self.assertEqual(line_count, report["finding_count"])
+            return duration
+
+        elapsed(100)
+        small_duration = elapsed(1_500)
+        large_duration = elapsed(6_000)
+
+        self.assertLess(
+            large_duration,
+            small_duration * 8,
+            {
+                "small_seconds": small_duration,
+                "large_seconds": large_duration,
+            },
+        )
+
+    def test_same_span_claim_checks_scale_below_quadratic_growth(self) -> None:
+        def elapsed(pair_count: int) -> float:
+            content = (
+                "not significant (p = 0.01), "
+                "significant (p = 0.80), "
+            ) * pair_count
+            started = time.perf_counter()
+            report = self._scan_text(content)
+            duration = time.perf_counter() - started
+            self.assertEqual(pair_count * 2, report["finding_count"])
+            return duration
+
+        elapsed(50)
+        small_duration = elapsed(500)
+        large_duration = elapsed(2_000)
+
+        self.assertLess(
+            large_duration,
+            small_duration * 8,
+            {
+                "small_seconds": small_duration,
+                "large_seconds": large_duration,
+            },
         )
 
     def test_displayed_and_source_labels_are_compared(self) -> None:
@@ -297,9 +440,32 @@ class EngineReportTests(unittest.TestCase):
                 "calculated_mean": 2.0,
                 "reported_mean": 5.0,
                 "series_label": "series_a",
-                "tolerance": 1e-09,
+                "tolerance": 0.5,
             },
             report["findings"][0]["evidence"],
+        )
+
+    def test_reported_mean_accepts_displayed_decimal_rounding(self) -> None:
+        report = self._scan_csv(
+            "series_label,value,reported_mean\n"
+            "series_a,1,1.67\n"
+            "series_a,2,1.67\n"
+            "series_a,2,1.67\n"
+        )
+        self.assertNotIn(
+            "reported_mean_mismatch",
+            [item["kind"] for item in report["findings"]],
+        )
+
+    def test_reported_mean_accepts_displayed_scientific_precision(self) -> None:
+        report = self._scan_csv(
+            "series_label,value,reported_mean\n"
+            "series_a,1160,1.2e3\n"
+            "series_a,1230,1.2e3\n"
+        )
+        self.assertNotIn(
+            "reported_mean_mismatch",
+            [item["kind"] for item in report["findings"]],
         )
 
     def test_matching_reported_mean_is_not_a_false_positive(self) -> None:
@@ -329,12 +495,100 @@ class EngineReportTests(unittest.TestCase):
             [item["kind"] for item in report["findings"]],
         )
 
+    def test_extreme_display_precision_does_not_abort_table_check(self) -> None:
+        report = self._scan_csv(
+            "series_label,value,reported_mean\n"
+            "series_a,0,1e-999999999\n"
+        )
+        self.assertEqual([], report["not_checked"])
+        self.assertNotIn(
+            "reported_mean_mismatch",
+            [item["kind"] for item in report["findings"]],
+        )
+
+    def test_large_values_do_not_expand_displayed_precision_tolerance(self) -> None:
+        report = self._scan_csv(
+            "series_label,value,reported_mean\n"
+            "series_a,1000000000001.4,1000000000000\n"
+        )
+        self.assert_has_kind(report, "reported_mean_mismatch")
+
     def test_duplicate_numeric_columns_are_detected(self) -> None:
         report = self._scan_csv(
             "series_a,series_b\n"
             "1,1\n2,2\n3,3\n4,4\n"
         )
         self.assert_has_kind(report, "duplicate_numeric_columns")
+
+    def test_duplicate_header_columns_keep_distinct_column_identity(self) -> None:
+        report = self._scan_csv(
+            "measurement,measurement\n"
+            "1,1\n2,2\n3,3\n4,4\n"
+        )
+        finding = next(
+            (
+                item
+                for item in report["findings"]
+                if item["kind"] == "duplicate_numeric_columns"
+            ),
+            None,
+        )
+        self.assertIsNotNone(finding)
+        self.assertEqual(
+            ["measurement", "measurement"],
+            finding["evidence"]["columns"],
+        )
+        self.assertEqual([1, 2], finding["evidence"]["column_indices"])
+
+    def test_bounded_missing_values_keep_aligned_numeric_comparison(self) -> None:
+        report = self._scan_csv(
+            "series_a,series_b\n"
+            "1,1\n"
+            "2,2\n"
+            ",3\n"
+            "4,4\n"
+            "5,5\n"
+        )
+        finding = next(
+            (
+                item
+                for item in report["findings"]
+                if item["kind"] == "duplicate_numeric_columns"
+            ),
+            None,
+        )
+        self.assertIsNotNone(finding)
+        self.assertEqual(4, finding["evidence"]["row_count"])
+        self.assertEqual([2, 3, 5, 6], finding["evidence"]["rows"])
+
+    def test_full_overlap_is_checked_before_pair_row_cap(self) -> None:
+        report = self._scan_csv(
+            "series_a,series_b\n"
+            "1,1\n"
+            "2,2\n"
+            "3,3\n"
+            "4,4\n"
+            "5,5\n"
+            "6,6\n"
+            "7,7\n",
+            limits=ScanLimits(
+                max_pair_rows=5,
+                min_group_n=100,
+                min_n=100,
+                min_sequence=100,
+            ),
+        )
+        finding = next(
+            (
+                item
+                for item in report["findings"]
+                if item["kind"] == "duplicate_numeric_columns"
+            ),
+            None,
+        )
+        self.assertIsNotNone(finding)
+        self.assertEqual(5, finding["evidence"]["row_count"])
+        self.assertEqual([2, 3, 4, 5, 6], finding["evidence"]["rows"])
 
     def test_repeated_numeric_sequence_uses_minimum_sequence_limit(self) -> None:
         report = self._scan_csv(
@@ -347,6 +601,16 @@ class EngineReportTests(unittest.TestCase):
             report["findings"][0]["evidence"],
         )
 
+    def test_missing_cell_breaks_repeated_sequence_continuity(self) -> None:
+        report = self._scan_csv(
+            "series_a\n1\n2\n3\n4\n\n1\n2\n3\n4\n",
+            limits=ScanLimits(min_sequence=4),
+        )
+        self.assertNotIn(
+            "repeated_numeric_sequence",
+            [item["kind"] for item in report["findings"]],
+        )
+
     def test_terminal_digit_concentration_checks_use_minimum_n(self) -> None:
         report = self._scan_csv(
             "value\n10\n20\n30\n40\n50\n60\n",
@@ -355,6 +619,21 @@ class EngineReportTests(unittest.TestCase):
         kinds = [item["kind"] for item in report["findings"]]
         self.assertIn("terminal_digit_spike", kinds)
         self.assertIn("terminal_digit_distribution", kinds)
+        classifications = {
+            item["kind"]: item["classification"]
+            for item in report["findings"]
+            if item["kind"] in {
+                "terminal_digit_spike",
+                "terminal_digit_distribution",
+            }
+        }
+        self.assertEqual(
+            {
+                "terminal_digit_distribution": "informational",
+                "terminal_digit_spike": "informational",
+            },
+            classifications,
+        )
 
     def test_decimal_terminal_digit_uses_last_supplied_digit(self) -> None:
         report = self._scan_csv(
@@ -434,6 +713,12 @@ class EngineReportTests(unittest.TestCase):
             "2,3,5\n4,5,9\n"
         )
         self.assert_has_kind(report, "reverse_calculation_chain")
+        finding = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "reverse_calculation_chain"
+        )
+        self.assertEqual("informational", finding["classification"])
 
     def test_small_count_constrains_displayed_percentage(self) -> None:
         report = self._scan_csv(
@@ -441,6 +726,12 @@ class EngineReportTests(unittest.TestCase):
             "8,12.5\n8,37.5\n8,62.5\n"
         )
         self.assert_has_kind(report, "percentage_quantization_constraint")
+        finding = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "percentage_quantization_constraint"
+        )
+        self.assertEqual("informational", finding["classification"])
 
     def test_impossible_count_percentage_combination_is_neutral_lead(self) -> None:
         report = self._scan_csv(
@@ -455,6 +746,16 @@ class EngineReportTests(unittest.TestCase):
         )
         self.assertEqual("consistency_lead", finding["classification"])
         self.assertNotIn("guilt", json.dumps(finding).casefold())
+
+    def test_displayed_percentage_accepts_normal_rounding(self) -> None:
+        report = self._scan_csv(
+            "total_count,event_count,displayed_percentage\n"
+            "3,1,33.3\n"
+        )
+        self.assertNotIn(
+            "allegation_count_impossible",
+            [item["kind"] for item in report["findings"]],
+        )
 
     def test_disclosed_formula_percentages_are_not_false_positives(self) -> None:
         report = self._scan_csv(
@@ -479,6 +780,60 @@ class EngineReportTests(unittest.TestCase):
             limits=ScanLimits(min_sequence=4),
         )
         self.assert_has_kind(report, "cross_panel_exact_reuse")
+
+    def test_same_panel_series_are_not_cross_panel_reuse(self) -> None:
+        report = self._scan_csv(
+            "panel,series_label,index,value\n"
+            "panel_1,series_a,1,1\n"
+            "panel_1,series_a,2,2\n"
+            "panel_1,series_a,3,4\n"
+            "panel_1,series_a,4,8\n"
+            "panel_1,series_b,1,1\n"
+            "panel_1,series_b,2,2\n"
+            "panel_1,series_b,3,4\n"
+            "panel_1,series_b,4,8\n",
+            limits=ScanLimits(min_sequence=4),
+        )
+        self.assertNotIn(
+            "cross_panel_exact_reuse",
+            [item["kind"] for item in report["findings"]],
+        )
+
+    def test_cross_panel_series_require_matching_index_values(self) -> None:
+        report = self._scan_csv(
+            "panel,series_label,index,value\n"
+            "panel_1,series_a,1,1\n"
+            "panel_1,series_a,2,2\n"
+            "panel_1,series_a,3,4\n"
+            "panel_1,series_a,4,8\n"
+            "panel_2,series_b,101,1\n"
+            "panel_2,series_b,102,2\n"
+            "panel_2,series_b,103,4\n"
+            "panel_2,series_b,104,8\n",
+            limits=ScanLimits(min_sequence=4),
+        )
+        self.assertNotIn(
+            "cross_panel_exact_reuse",
+            [item["kind"] for item in report["findings"]],
+        )
+
+    def test_cross_panel_series_with_duplicate_index_abstain(self) -> None:
+        report = self._scan_csv(
+            "panel,series_label,index,value\n"
+            "panel_1,series_a,1,1\n"
+            "panel_1,series_a,1,2\n"
+            "panel_1,series_a,2,4\n"
+            "panel_1,series_a,3,8\n"
+            "panel_2,series_b,1,1\n"
+            "panel_2,series_b,2,2\n"
+            "panel_2,series_b,3,4\n"
+            "panel_2,series_b,4,8\n",
+            limits=ScanLimits(min_sequence=4),
+        )
+        self.assertNotIn(
+            "cross_panel_exact_reuse",
+            [item["kind"] for item in report["findings"]],
+        )
 
     def test_disclosed_cross_panel_reuse_is_not_a_false_positive(self) -> None:
         report = self._scan_csv(
@@ -767,6 +1122,7 @@ class EngineReportTests(unittest.TestCase):
             },
             finding["evidence"],
         )
+        self.assertEqual("informational", finding["classification"])
 
 
 if __name__ == "__main__":

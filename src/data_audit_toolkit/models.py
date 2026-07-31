@@ -19,6 +19,8 @@ class ScanLimits:
     max_archive_entry_bytes: int = 64 * 1024 * 1024
     max_archive_ratio: int = 100
     max_xml_bytes: int = 32 * 1024 * 1024
+    significance_alpha: float = 0.05
+    min_pair_overlap_ratio: float = 0.8
 
 
 DEFAULT_LIMITS = ScanLimits()
