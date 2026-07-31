@@ -27,6 +27,12 @@ not checked, or consistency leads; they are not misconduct conclusions.
 The command-line `Consistency leads` summary counts only findings whose
 `classification` is `consistency_lead`; it does not reuse `finding_count`.
 
+Evidence detail is detector-specific. Duplicate numeric-column comparisons
+include one-based `column_indices`, matched source `rows`, and `row_count`.
+Statistical-language conflicts include `operator`, `p_value`, configured
+`alpha`, and `line`. Some aggregate signals do not yet provide exact cell or
+line locations.
+
 ## Stable reason codes and exits
 
 Common `not_checked` or inventory reasons include
@@ -44,5 +50,5 @@ Common `not_checked` or inventory reasons include
 `xlsx_unsupported_layout`.
 
 `scan` exits 0 after writing a report; handled output errors and operational
-failures exit 1; invalid command-line syntax exits 2. The benchmark wrapper
-exits 0 when `failures` is empty and 1 otherwise.
+failures exit 1; invalid command-line syntax exits 2. `data-audit benchmark`
+and the benchmark wrapper exit 0 when `failures` is empty and 1 otherwise.
