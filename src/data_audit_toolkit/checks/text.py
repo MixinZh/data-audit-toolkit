@@ -87,11 +87,17 @@ def _claim_language_candidates(
         candidates.append(
             (absolute_start, absolute_end, 0, "not significant")
         )
+    negative_index = 0
     for match in _POSITIVE_SIGNIFICANCE_PATTERN.finditer(local_text):
-        if any(
-            negative.start() <= match.start()
-            and match.end() <= negative.end()
-            for negative in negative_matches
+        while (
+            negative_index < len(negative_matches)
+            and negative_matches[negative_index].end() <= match.start()
+        ):
+            negative_index += 1
+        if (
+            negative_index < len(negative_matches)
+            and negative_matches[negative_index].start() <= match.start()
+            and match.end() <= negative_matches[negative_index].end()
         ):
             continue
         absolute_start = span_start + match.start()

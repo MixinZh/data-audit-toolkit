@@ -326,6 +326,31 @@ class EngineReportTests(unittest.TestCase):
             },
         )
 
+    def test_same_span_claim_checks_scale_below_quadratic_growth(self) -> None:
+        def elapsed(pair_count: int) -> float:
+            content = (
+                "not significant (p = 0.01), "
+                "significant (p = 0.80), "
+            ) * pair_count
+            started = time.perf_counter()
+            report = self._scan_text(content)
+            duration = time.perf_counter() - started
+            self.assertEqual(pair_count * 2, report["finding_count"])
+            return duration
+
+        elapsed(50)
+        small_duration = elapsed(500)
+        large_duration = elapsed(2_000)
+
+        self.assertLess(
+            large_duration,
+            small_duration * 8,
+            {
+                "small_seconds": small_duration,
+                "large_seconds": large_duration,
+            },
+        )
+
     def test_displayed_and_source_labels_are_compared(self) -> None:
         report = self._scan_csv(
             "displayed_label,source_label\n"
