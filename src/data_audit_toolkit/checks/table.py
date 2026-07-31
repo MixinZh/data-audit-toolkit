@@ -202,9 +202,9 @@ def _check_numeric_columns(
         numeric,
         2,
     ):
-        overlap_rows = sorted(
+        all_overlap_rows = sorted(
             set(first.numeric_by_row) & set(second.numeric_by_row)
-        )[: limits.max_pair_rows]
+        )
         required_overlap = max(
             2,
             math.ceil(
@@ -215,8 +215,11 @@ def _check_numeric_columns(
                 * limits.min_pair_overlap_ratio
             ),
         )
+        if len(all_overlap_rows) < required_overlap:
+            continue
+        overlap_rows = all_overlap_rows[: limits.max_pair_rows]
         pair_count = len(overlap_rows)
-        if pair_count < required_overlap:
+        if pair_count < 2:
             continue
         first_bounded = [
             first.numeric_by_row[row]

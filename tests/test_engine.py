@@ -5,6 +5,7 @@ import importlib.util
 import json
 import struct
 import tempfile
+import time
 import unittest
 import zlib
 import zipfile
@@ -245,6 +246,32 @@ class EngineReportTests(unittest.TestCase):
                     [item["kind"] for item in report["findings"]],
                 )
 
+    def test_adverbial_significance_conflicts_with_high_p_value(self) -> None:
+        report = self._scan_text(
+            "The groups were significantly different (p = 0.80)."
+        )
+        self.assert_has_kind(report, "significance_language_conflict")
+        conflict = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "significance_language_conflict"
+        )
+        self.assertEqual("significant", conflict["evidence"]["language"])
+
+    def test_adverbial_negative_significance_conflicts_with_low_p_value(
+        self,
+    ) -> None:
+        report = self._scan_text(
+            "The groups were not significantly different (p = 0.01)."
+        )
+        self.assert_has_kind(report, "significance_language_conflict")
+        conflict = next(
+            item
+            for item in report["findings"]
+            if item["kind"] == "significance_language_conflict"
+        )
+        self.assertEqual("not significant", conflict["evidence"]["language"])
+
     def test_each_p_value_is_paired_with_its_local_claim(self) -> None:
         report = self._scan_text(
             "The first result was significant (p = 0.01). "
@@ -273,6 +300,31 @@ class EngineReportTests(unittest.TestCase):
             if item["kind"] == "significance_language_conflict"
         )
         self.assertEqual(0.01, conflict["evidence"]["alpha"])
+
+    def test_multiline_p_value_checks_scale_below_quadratic_growth(self) -> None:
+        def elapsed(line_count: int) -> float:
+            content = "\n".join(
+                "The result was significant (p = 0.80)."
+                for _ in range(line_count)
+            )
+            started = time.perf_counter()
+            report = self._scan_text(content)
+            duration = time.perf_counter() - started
+            self.assertEqual(line_count, report["finding_count"])
+            return duration
+
+        elapsed(100)
+        small_duration = elapsed(1_500)
+        large_duration = elapsed(6_000)
+
+        self.assertLess(
+            large_duration,
+            small_duration * 8,
+            {
+                "small_seconds": small_duration,
+                "large_seconds": large_duration,
+            },
+        )
 
     def test_displayed_and_source_labels_are_compared(self) -> None:
         report = self._scan_csv(
@@ -483,6 +535,35 @@ class EngineReportTests(unittest.TestCase):
         self.assertIsNotNone(finding)
         self.assertEqual(4, finding["evidence"]["row_count"])
         self.assertEqual([2, 3, 5, 6], finding["evidence"]["rows"])
+
+    def test_full_overlap_is_checked_before_pair_row_cap(self) -> None:
+        report = self._scan_csv(
+            "series_a,series_b\n"
+            "1,1\n"
+            "2,2\n"
+            "3,3\n"
+            "4,4\n"
+            "5,5\n"
+            "6,6\n"
+            "7,7\n",
+            limits=ScanLimits(
+                max_pair_rows=5,
+                min_group_n=100,
+                min_n=100,
+                min_sequence=100,
+            ),
+        )
+        finding = next(
+            (
+                item
+                for item in report["findings"]
+                if item["kind"] == "duplicate_numeric_columns"
+            ),
+            None,
+        )
+        self.assertIsNotNone(finding)
+        self.assertEqual(5, finding["evidence"]["row_count"])
+        self.assertEqual([2, 3, 4, 5, 6], finding["evidence"]["rows"])
 
     def test_repeated_numeric_sequence_uses_minimum_sequence_limit(self) -> None:
         report = self._scan_csv(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from typing import Any
 
 from .common import finding
@@ -38,7 +39,8 @@ _LOCAL_TEXT_BOUNDARY_PATTERN = re.compile(
 _NEGATIVE_SIGNIFICANCE_PATTERN = re.compile(
     r"\b(?:"
     r"no\s+(?:statistically\s+)?significant(?:\s+difference)?|"
-    r"not\s+(?:statistically\s+)?significant|"
+    r"not\s+(?:statistically\s+)?significant(?:ly)?"
+    r"(?:\s+different)?|"
     r"non[- ]significant|"
     r"fail(?:ed|s)?\s+to\s+(?:reach|achieve)\s+"
     r"(?:statistical\s+)?significance"
@@ -46,7 +48,7 @@ _NEGATIVE_SIGNIFICANCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _POSITIVE_SIGNIFICANCE_PATTERN = re.compile(
-    r"\b(?:statistically\s+)?significant\b",
+    r"\b(?:statistically\s+)?significant(?:ly)?\b",
     re.IGNORECASE,
 )
 _MALFORMED_REFERENCE_PATTERN = re.compile(
@@ -71,21 +73,20 @@ def _local_text_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _claim_language(
+def _claim_language_candidates(
     text: str,
     span_start: int,
     span_end: int,
-    p_start: int,
-    p_end: int,
-) -> str | None:
+) -> list[tuple[int, int, int, str]]:
     local_text = text[span_start:span_end]
     negative_matches = list(_NEGATIVE_SIGNIFICANCE_PATTERN.finditer(local_text))
-    candidates: list[tuple[int, int, str]] = []
+    candidates: list[tuple[int, int, int, str]] = []
     for match in negative_matches:
         absolute_start = span_start + match.start()
         absolute_end = span_start + match.end()
-        distance = min(abs(p_start - absolute_end), abs(absolute_start - p_end))
-        candidates.append((distance, 0, "not significant"))
+        candidates.append(
+            (absolute_start, absolute_end, 0, "not significant")
+        )
     for match in _POSITIVE_SIGNIFICANCE_PATTERN.finditer(local_text):
         if any(
             negative.start() <= match.start()
@@ -95,9 +96,34 @@ def _claim_language(
             continue
         absolute_start = span_start + match.start()
         absolute_end = span_start + match.end()
-        distance = min(abs(p_start - absolute_end), abs(absolute_start - p_end))
-        candidates.append((distance, 1, "significant"))
-    return min(candidates)[2] if candidates else None
+        candidates.append((absolute_start, absolute_end, 1, "significant"))
+    return sorted(candidates)
+
+
+def _claim_language(
+    candidates: list[tuple[int, int, int, str]],
+    candidate_starts: list[int],
+    p_start: int,
+    p_end: int,
+) -> str | None:
+    if not candidates:
+        return None
+    insertion = bisect_left(candidate_starts, p_start)
+    nearby = candidates[max(0, insertion - 1) : insertion + 1]
+
+    def ranked(
+        candidate: tuple[int, int, int, str],
+    ) -> tuple[int, int, str]:
+        start, end, priority, language = candidate
+        if end <= p_start:
+            distance = p_start - end
+        elif start >= p_end:
+            distance = start - p_end
+        else:
+            distance = 0
+        return distance, priority, language
+
+    return min(ranked(candidate) for candidate in nearby)[2]
 
 
 def _p_relation_to_alpha(
@@ -192,21 +218,38 @@ def check_text(
     if not 0 < significance_alpha < 1:
         raise ValueError("significance_alpha must be between 0 and 1")
     local_spans = _local_text_spans(text)
+    span_index = 0
+    candidate_span: tuple[int, int] | None = None
+    candidates: list[tuple[int, int, int, str]] = []
+    candidate_starts: list[int] = []
+    line = 1
+    line_cursor = 0
     for p_match in _P_VALUE_PATTERN.finditer(text):
         operator = p_match.group("operator").replace("≤", "<=").replace("≥", ">=")
         p_value = float(p_match.group("p_value"))
-        local_span = next(
-            (
-                (start, end)
-                for start, end in local_spans
-                if start <= p_match.start() < end
-            ),
-            (0, len(text)),
-        )
+        while (
+            span_index < len(local_spans)
+            and p_match.start() >= local_spans[span_index][1]
+        ):
+            span_index += 1
+        if (
+            span_index < len(local_spans)
+            and local_spans[span_index][0] <= p_match.start()
+        ):
+            local_span = local_spans[span_index]
+        else:
+            local_span = (0, len(text))
+        if local_span != candidate_span:
+            candidates = _claim_language_candidates(
+                text,
+                local_span[0],
+                local_span[1],
+            )
+            candidate_starts = [candidate[0] for candidate in candidates]
+            candidate_span = local_span
         language = _claim_language(
-            text,
-            local_span[0],
-            local_span[1],
+            candidates,
+            candidate_starts,
             p_match.start(),
             p_match.end(),
         )
@@ -222,6 +265,8 @@ def check_text(
         )
         if not conflict:
             continue
+        line += text.count("\n", line_cursor, p_match.start())
+        line_cursor = p_match.start()
         findings.append(
             finding(
                 "significance_language_conflict",
@@ -229,7 +274,7 @@ def check_text(
                 {
                     "alpha": significance_alpha,
                     "language": language,
-                    "line": text.count("\n", 0, p_match.start()) + 1,
+                    "line": line,
                     "operator": operator,
                     "p_value": p_value,
                 },
