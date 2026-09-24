@@ -1,14 +1,16 @@
 # Data Audit Toolkit
 
-**Check local files for inconsistencies — without uploading them.**
+**Check local files for inconsistencies without uploading them.**
 
-Data Audit Toolkit is a free, experimental, schema-aware command-line checker
-for spreadsheets, text files, and images on your computer. It applies
-deterministic rules when an input matches a supported structure, points to
-patterns that may deserve a closer look, and tells you which files it could not
-inspect.
+Data Audit Toolkit is a free, experimental tool for checking spreadsheets, text
+files, and images on your computer. It uses a set of rules to identify patterns
+that may deserve a closer look before you use the data in your work.
 
 No account, upload, API key, or AI model is required.
+
+> **Coming soon:** A more powerful, easier-to-use agentic skill version is
+> planned. It will build on the toolkit to help guide you through the audit
+> process and interpret the results in plain language.
 
 > **Important:** A result is a lead for a person to review, not proof that
 > anything is wrong. Rounding, formatting, missing context, and other ordinary
@@ -16,24 +18,24 @@ No account, upload, API key, or AI model is required.
 
 ## What it can catch
 
-The toolkit can flag examples such as:
+The toolkit can flag patterns such as:
 
 - the same numbers appearing under differently named columns
 - a sample count stated one way in a methods section and another way in results
 - a reported value that does not match the checked source table
 - unusual repeated number patterns
-- repeated regions inside an image, when optional image support is installed
-- files that were missing, unsupported, unreadable, or stopped by a safety limit
+- repeated regions within an image, when optional image support is installed
 
-The report always names the source file. Location detail varies by check: newer
-table comparisons include column indexes and rows, and statistical-language
-checks include line numbers, while some aggregate checks currently report only
-the affected columns or counts. The same files and settings produce the same
-result, so another reviewer can repeat the check.
+It also lists files it could not check because they were missing, unsupported,
+unreadable, or blocked by a safety limit.
+
+Each finding identifies the source file. Depending on the check, it may also
+identify the relevant lines, rows, columns, or image regions. Some checks report
+only the affected columns or summary counts.
 
 ## Quick start
 
-The current release uses a terminal rather than a graphical app.
+The current release runs in a terminal.
 
 ### 1. Check the requirements
 
@@ -41,8 +43,7 @@ You need:
 
 - [Python 3.10 or newer](https://www.python.org/downloads/)
 - [Git](https://git-scm.com/downloads), or GitHub's **Download ZIP** option
-- Linux or macOS. Windows is not currently supported by the secure filesystem
-  traversal backend.
+- Linux or macOS. Windows is not currently supported.
 
 Check your Python version:
 
@@ -62,8 +63,12 @@ python3 -m pip install .
 ```
 
 If you do not use Git, select **Code → Download ZIP** near the top of this
-GitHub page, extract the downloaded file, and open your terminal in that folder
-before running the install command.
+GitHub page. Extract the downloaded file, then open your terminal in the
+extracted folder and run:
+
+```bash
+python3 -m pip install .
+```
 
 ### 3. Try the included example
 
@@ -85,7 +90,7 @@ Review the report before drawing conclusions.
 
 - **Files inventoried**: every file the toolkit found.
 - **Files checked**: files it was able to inspect.
-- **Consistency leads**: reproducible patterns for a person to review.
+- **Consistency leads**: patterns that can be reproduced and need human review.
 - **Not checked**: files or comparisons the toolkit could not safely complete.
 - **Report**: the detailed report saved on your computer.
 
@@ -96,13 +101,14 @@ data-audit scan /path/to/your/files \
   --output audit-report.json
 ```
 
-The input can be one file, one folder, or several file and folder paths. The
-output report is automatically excluded from the current scan. Saving it outside
-the scanned folder is still recommended so input and generated output remain
-visibly separate.
+You can provide one file, one folder, or several file and folder paths.
+The output report is automatically excluded from the current scan. Saving it
+outside the scanned folder is still recommended to keep your source files
+separate from generated reports.
 
-Statistical-language checks use `0.05` as the default significance threshold.
-Set a different threshold when the analysis requires one:
+Checks for inconsistent statistical wording use `0.05` as the default
+significance threshold. Set a different threshold when your analysis requires
+one:
 
 ```bash
 data-audit scan /path/to/your/files \
@@ -114,11 +120,11 @@ data-audit scan /path/to/your/files \
 
 | Type | File extensions | Notes |
 | --- | --- | --- |
-| Tables | `.csv`, `.tsv`, `.xlsx` | Included in the base install |
-| Text | `.txt`, `.md`, `.html`, `.htm` | Included in the base install |
+| Tables | `.csv`, `.tsv`, `.xlsx` | Included in the base installation |
+| Text | `.txt`, `.md`, `.html`, `.htm` | Included in the base installation |
 | Images | `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff` | Requires optional Pillow support |
 
-To enable image checks:
+To enable image checks, run this command from the toolkit folder:
 
 ```bash
 python3 -m pip install ".[images]"
@@ -126,29 +132,30 @@ python3 -m pip install ".[images]"
 
 Other file types are listed in the report but are not inspected. PDF files are
 not supported in this release. See
-[`references/supported-inputs.md`](references/supported-inputs.md) for the full
-list of limits.
+[supported inputs](references/supported-inputs.md) for the full list of limits.
 
 ## Privacy and limits
 
-- Selected files stay on your computer; the toolkit does not upload them.
-- No telemetry is collected.
-- The toolkit reads the selected inputs and writes a separate report.
-- Safety and size limits stop unusually large or unsafe inputs from being
+- Selected files stay on your computer. The toolkit does not upload them.
+- No usage telemetry is collected.
+- The toolkit reads the selected files and writes a separate report.
+- Safety and size limits prevent unusually large or unsafe inputs from being
   opened.
 - Unsupported or blocked files remain visible under `not_checked`.
-- A file listed under `scanned_files` was parsed successfully; this does not
-  mean that every claim or column matched an applicable semantic check.
-- Terminal-digit patterns, percentage quantization, reverse-calculation chains,
-  and repeated image tiles are informational signals, not default consistency
-  leads.
-- Every lead needs human review and a check of plausible ordinary explanations.
+- A file listed under `scanned_files` was read successfully. This does not mean
+  that every claim or column was checked. Some checks require specific column
+  names or data structures.
+- Patterns involving final digits, unusually regular percentages, possible
+  reverse calculations, and repeated image tiles are informational signals.
+  They are not counted as consistency leads by default.
+- Every lead needs human review, including a check for plausible ordinary
+  explanations.
 
 ## What is in the report
 
-The report is a JSON file, a structured text format that can be opened in a text
-editor or used by another program. It includes an inventory, findings, source
-locations, and a visible list of anything not checked.
+The report is a JSON file, a structured text format that you can open in a text
+editor or read with another program. It includes a file inventory, findings,
+available source locations, and a list of anything that was not checked.
 
 For example:
 
@@ -164,37 +171,42 @@ For example:
 }
 ```
 
-See [`references/output-schema.md`](references/output-schema.md) for the full
-technical format and [`references/signal-map.md`](references/signal-map.md) for
-the checks and interpretation boundaries.
+See the [output schema](references/output-schema.md) for the full technical
+format and the [signal map](references/signal-map.md) for an explanation of
+the checks and their limits.
 
-## Optional: use it as an Agent Skill
+## Optional: use it with an AI agent
 
-This section is only for people using a compatible AI agent. You do not need an
-agent to use the command-line tool.
+A basic Agent Skill is already included for compatible AI agents. You do not
+need an agent to use the command-line tool.
 
 Install this repository as an Agent Skill, then follow
 [`SKILL.md`](SKILL.md). The skill instructs the agent to run the same local
-scanner, show what was and was not checked, and treat results as review leads
-rather than final judgments.
+scanner, explain what was and was not checked, and treat results as review
+leads rather than final judgments.
+
+The upcoming agentic skill version is intended to offer more capabilities
+and a simpler, guided experience. Those improvements are planned and are not
+part of the current release.
 
 ## For developers
 
-Run the complete test suite and the packaged synthetic benchmark:
+Run the complete test suite and the included synthetic benchmark:
 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 scripts/check_benchmark_suite.py
 ```
 
-The benchmark contains 19 synthetic cases. It checks packaged regression
-behavior, not a user's files, detector accuracy, precision, or recall.
+The benchmark contains 19 synthetic cases. It checks whether the toolkit
+behaves as expected on those examples. It does not validate a user's files
+or measure real-world detection accuracy, precision, or recall.
 
 ## Contributing and security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for local development and contribution
-expectations. See [SECURITY.md](SECURITY.md) for vulnerability-reporting
-guidance.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and contribution
+guidelines. See [SECURITY.md](SECURITY.md) for instructions on reporting
+security vulnerabilities.
 
 ## License
 
