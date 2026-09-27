@@ -201,10 +201,10 @@ optional dependency for image checks.
 
 ```text
 Selected files and folders
-  -> inventory, SHA-256 hashes, temporary file snapshots
-  -> format-specific parsing
-  -> applicable table, text, and image checks
-  -> findings, source locations, and not-checked reasons
+  -> inventory, hashes, snapshots
+  -> parse each file
+  -> run applicable checks
+  -> findings and coverage limits
   -> local JSON report
 ```
 
@@ -232,15 +232,35 @@ Checks run within a file or worksheet. The current scanner does not join
 separate files, extract values from plotted figures, or automatically match a
 paper's prose to a source workbook. Representative rules are:
 
-| Check | What the code compares | Conditions and limits |
-| --- | --- | --- |
-| Numeric tables | Values in two columns for exact duplicates and fixed offsets; contiguous values within a column for repeated sequences | Missing cells keep their original row positions. Pairwise checks require at least two shared numeric rows and 80% overlap relative to the column with more numeric rows. Pair comparisons use at most 5,000 shared rows by default. |
-| Reported means | The arithmetic mean of `value` rows grouped by `series_label`, compared with `reported_mean` | Each required column name must occur exactly once. The comparison allows for the reported number's displayed precision. |
-| Counts and percentages | `100 * event_count / total_count`, compared with `displayed_percentage` | Requires those named fields and valid counts; allows for displayed precision. |
-| Series in different panels | Values aligned by shared `index` values, grouped by `panel` and `series_label` | Requires different panel and series labels, unique indices within each series, and at least eight shared indices by default. Disclosed reuse can suppress the comparison. |
-| Statistical wording | A written p-value and its inequality operator, paired with nearby significance wording in the same sentence or clause | Uses `--significance-alpha`, default `0.05`. It checks wording against the supplied value; it does not recompute the statistical test. |
-| Methods/results statements | Explicit phrases such as `Methods sample count: n=12` and `Results sample count: n=10` | Uses text patterns for labeled statements, not general interpretation of unrestricted prose. |
-| Repeated image tiles | Exact RGBA pixel bytes in non-overlapping tiles within one image | Requires Pillow; defaults to 32 by 32 pixel tiles and a four-million-pixel image limit. Reports the first repeated pair as informational. It does not match rotated, resized, or approximately similar regions. |
+- **Numeric tables:** compare values in two columns for exact duplicates and
+  fixed offsets, and contiguous values within a column for repeated sequences.
+  Missing cells keep their original row positions. Pairwise checks require at
+  least two shared numeric rows and 80% overlap relative to the column with
+  more numeric rows. Pair comparisons use at most 5,000 shared rows by default.
+- **Reported means:** calculate the arithmetic mean of `value` rows grouped by
+  `series_label` and compare it with `reported_mean`. Each required column name
+  must occur exactly once. The comparison allows for the reported number's
+  displayed precision.
+- **Counts and percentages:** calculate `100 * event_count / total_count` and
+  compare it with `displayed_percentage`. This requires those named fields and
+  valid counts, and allows for displayed precision.
+- **Series in different panels:** compare values aligned by shared `index`
+  values, grouped by `panel` and `series_label`. This requires different panel
+  and series labels, unique indices within each series, and at least eight
+  shared indices by default. Disclosed reuse can suppress the comparison.
+- **Statistical wording:** pair a written p-value and its inequality operator
+  with nearby significance wording in the same sentence or clause. The rule
+  uses `--significance-alpha`, default `0.05`. It checks wording against the
+  supplied value; it does not recompute the statistical test.
+- **Methods/results statements:** compare explicit phrases such as
+  `Methods sample count: n=12` and `Results sample count: n=10`. This uses text
+  patterns for labeled statements, not general interpretation of unrestricted
+  prose.
+- **Repeated image tiles:** compare exact RGBA pixel bytes in non-overlapping
+  tiles within one image. This requires Pillow and defaults to 32 by 32 pixel
+  tiles and a four-million-pixel image limit. The first repeated pair is
+  reported as informational. The rule does not match rotated, resized, or
+  approximately similar regions.
 
 The implementations are in [table.py](src/data_audit_toolkit/checks/table.py),
 [text.py](src/data_audit_toolkit/checks/text.py), and
