@@ -191,6 +191,118 @@ part of the current release.
 
 ## For developers
 
+### How it works: for technical readers
+
+The scanner turns selected files into a JSON report of specific comparisons:
+which values or statements disagree, where they came from, and what could not
+be checked. The checks are Python rules, with no model inference or network
+requests. The base package uses the Python standard library; Pillow is the
+optional dependency for image checks.
+
+```text
+Selected files and folders
+  -> inventory, SHA-256 hashes, temporary file snapshots
+  -> format-specific parsing
+  -> applicable table, text, and image checks
+  -> findings, source locations, and not-checked reasons
+  -> local JSON report
+```
+
+**1. Inventory the files and preserve the bytes being checked.**
+[The traversal code](src/data_audit_toolkit/traversal.py) walks the selected
+paths without following symlinks. It records relative paths, sizes, and
+SHA-256 hashes for files it can safely read. Supported files are copied into
+temporary snapshots during hashing, so the parser reads the bytes represented
+by the recorded hash. A detected change during that read blocks the file.
+The temporary snapshots are removed after the scan. Default intake limits are
+1,000 files, 128 MiB per file, and 512 MiB total.
+
+**2. Parse each supported file.**
+[The scan engine](src/data_audit_toolkit/engine.py) reads UTF-8 CSV/TSV into
+rows and passes text files, including HTML source, to the text checker. It
+does not render HTML or run scripts. For XLSX,
+[the workbook reader](src/data_audit_toolkit/archive.py) checks the ZIP
+container and follows its declared workbook and worksheet relationships.
+It reads stored cell values without recalculating formulas. Archive-size,
+compression, XML, and worksheet limits can block parsing; the report records
+the reason. Each worksheet is checked separately.
+
+**3. Run the rules whose inputs are present.**
+Checks run within a file or worksheet. The current scanner does not join
+separate files, extract values from plotted figures, or automatically match a
+paper's prose to a source workbook. Representative rules are:
+
+| Check | What the code compares | Conditions and limits |
+| --- | --- | --- |
+| Numeric tables | Values in two columns for exact duplicates and fixed offsets; contiguous values within a column for repeated sequences | Missing cells keep their original row positions. Pairwise checks require at least two shared numeric rows and 80% overlap relative to the column with more numeric rows. Pair comparisons use at most 5,000 shared rows by default. |
+| Reported means | The arithmetic mean of `value` rows grouped by `series_label`, compared with `reported_mean` | Each required column name must occur exactly once. The comparison allows for the reported number's displayed precision. |
+| Counts and percentages | `100 * event_count / total_count`, compared with `displayed_percentage` | Requires those named fields and valid counts; allows for displayed precision. |
+| Series in different panels | Values aligned by shared `index` values, grouped by `panel` and `series_label` | Requires different panel and series labels, unique indices within each series, and at least eight shared indices by default. Disclosed reuse can suppress the comparison. |
+| Statistical wording | A written p-value and its inequality operator, paired with nearby significance wording in the same sentence or clause | Uses `--significance-alpha`, default `0.05`. It checks wording against the supplied value; it does not recompute the statistical test. |
+| Methods/results statements | Explicit phrases such as `Methods sample count: n=12` and `Results sample count: n=10` | Uses text patterns for labeled statements, not general interpretation of unrestricted prose. |
+| Repeated image tiles | Exact RGBA pixel bytes in non-overlapping tiles within one image | Requires Pillow; defaults to 32 by 32 pixel tiles and a four-million-pixel image limit. Reports the first repeated pair as informational. It does not match rotated, resized, or approximately similar regions. |
+
+The implementations are in [table.py](src/data_audit_toolkit/checks/table.py),
+[text.py](src/data_audit_toolkit/checks/text.py), and
+[image.py](src/data_audit_toolkit/checks/image.py). Default thresholds are in
+[ScanLimits](src/data_audit_toolkit/models.py). A parsed file may satisfy none
+of a rule's prerequisites. The report does not yet provide a complete list of
+rules applied to each file, and several rules retain only the first finding
+of a given kind per table. Finding counts are not counts of every occurrence.
+
+**Worked example: a reported mean.** Save this invented table as `means.csv`:
+
+```csv
+series_label,value,reported_mean
+group_a,2,4.0
+group_a,3,4.0
+group_a,4,4.0
+```
+
+Run `data-audit scan means.csv --output means-report.json`. The checker groups
+the three values under `group_a` and calculates `(2 + 3 + 4) / 3 = 3.0`.
+The supplied mean is `4.0`; its one decimal place gives a rounding tolerance
+of `0.05`. The difference exceeds that tolerance, so the report includes a
+`reported_mean_mismatch` finding with this evidence:
+
+```json
+{
+  "calculated_mean": 3.0,
+  "reported_mean": 4.0,
+  "series_label": "group_a",
+  "tolerance": 0.05
+}
+```
+
+This establishes a mismatch between the supplied values and the supplied
+mean. A reviewer still needs to check whether the rows are complete, whether
+the mean refers to another subset, or whether a transcription error occurred.
+
+**4. Write a report that separates observations from interpretation.**
+Each finding records its `kind`, source `path`, structured `evidence`,
+`evidence_layer`, and `classification`. The evidence layer distinguishes a
+computed comparison (`data_show`), supplied wording (`source_says`), a reviewer
+inference, and material not checked. Classification distinguishes
+`consistency_lead`, `informational`, and `not_checked`. These fields describe
+the result; they are not confidence probabilities.
+
+The engine sorts findings by path, kind, and evidence before
+[the output writer](src/data_audit_toolkit/output.py) writes the report
+atomically. It refuses to overwrite an existing report unless `--overwrite`
+is supplied and rejects output paths that conflict with protected inputs.
+`finding_count` includes all classifications; the terminal's **Consistency
+leads** count includes only `consistency_lead` findings. A successful scan exits
+`0` even when findings or unchecked files exist, so automation must inspect
+the JSON rather than treating the exit code as a clean-data result.
+
+For Python integration, the same scan is available through
+`data_audit_toolkit.engine.scan_paths(inputs, limits=ScanLimits(...))`, which
+returns the report dictionary. See the [output schema](references/output-schema.md)
+for fields and reason codes, and [supported inputs](references/supported-inputs.md)
+for parsing and resource limits.
+
+### Test the implementation
+
 Run the complete test suite and the included synthetic benchmark:
 
 ```bash

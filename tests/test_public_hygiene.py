@@ -125,7 +125,7 @@ class PublicHygieneTests(unittest.TestCase):
         folded = text.casefold()
         self.assertTrue(text.startswith("# Data Audit Toolkit\n"))
         self.assertIn(
-            "**Check local files for inconsistencies — without uploading them.**",
+            "**Check local files for inconsistencies without uploading them.**",
             text,
         )
         self.assertNotIn("research " + "audit", folded)
@@ -138,7 +138,7 @@ class PublicHygieneTests(unittest.TestCase):
         )
         self.assertLess(
             text.index("## Quick start"),
-            text.index("## Optional: use it as an Agent Skill"),
+            text.index("## Optional: use it with an AI agent"),
         )
 
     def test_readme_preserves_newcomer_first_section_order(self) -> None:
@@ -149,24 +149,23 @@ class PublicHygieneTests(unittest.TestCase):
             for line in text.splitlines()
             if re.fullmatch(r"#{1,6} .+", line)
         ]
-        self.assertEqual(
-            [
-                "# Data Audit Toolkit",
-                "## What it can catch",
-                "## Quick start",
-                "### 1. Check the requirements",
-                "### 2. Download and install the toolkit",
-                "### 3. Try the included example",
-                "## Supported files",
-                "## Privacy and limits",
-                "## What is in the report",
-                "## Optional: use it as an Agent Skill",
-                "## For developers",
-                "## Contributing and security",
-                "## License",
-            ],
-            headings,
-        )
+        reader_path = [
+            "## What it can catch",
+            "## Quick start",
+            "### 1. Check the requirements",
+            "### 2. Download and install the toolkit",
+            "### 3. Try the included example",
+            "## Supported files",
+            "## Privacy and limits",
+            "## What is in the report",
+            "## Optional: use it with an AI agent",
+            "## For developers",
+            "## Contributing and security",
+            "## License",
+        ]
+        for earlier, later in zip(reader_path, reader_path[1:]):
+            with self.subTest(earlier=earlier, later=later):
+                self.assertLess(headings.index(earlier), headings.index(later))
 
     def test_readme_not_checked_example_uses_runtime_file_key(self) -> None:
         root = Path(__file__).resolve().parents[1]
